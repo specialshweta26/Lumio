@@ -1,0 +1,119 @@
+import { isIP } from "node:net";
+import { normalizeOpenAiCompatibleBaseUrl, OPENAI_COMPATIBLE_PROVIDER_ID } from "@rakazo/contracts";
+import { isCloudMetadataAddress, isLinkLocalAddress, isPrivateAddress } from "./network-address.js";
+
+export { normalizeOpenAiCompatibleBaseUrl, OPENAI_COMPATIBLE_PROVIDER_ID };
+
+const BUILT_IN_PUBLIC_MODEL_HOSTS = new Set(["ollama.com"]);
+
+const METADATA_HOSTS = new Set(["metadata.google.internal", "metadata.goog"]);
+
+export function openAiCompatAllowPublicHosts(): boolean {
+  return process.env.RAKAZO_OPENAI_COMPAT_ALLOW_PUBLIC === "1";
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "");
+}
+
+export function isPrivateOpenAiCompatibleHostname(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  if (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "host.docker.internal"
+  ) {
+    return true;
+  }
+  if (METADATA_HOSTS.has(normalized)) return false;
+  const ipKind = isIP(normalized);
+  if (ipKind === 4 || ipKind === 6) return isPrivateAddress(normalized);
+  return (process.env.RAKAZO_OPENAI_COMPAT_PRIVATE_HOSTS ?? "")
+    .split(",")
+    .some((entry) => entry.trim() !== "" && normalizeHostname(entry.trim()) === normalized);
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  return (
+    METADATA_HOSTS.has(normalized) ||
+    (isIP(normalized) !== 0 &&
+      (isCloudMetadataAddress(normalized) || isLinkLocalAddress(normalized)))
+  );
+}
+
+/**
+ * Who may reach which model endpoints. `allowPrivate` comes from
+ * operator configuration; absent means deny.
+ */
+export type OpenAiCompatibleUrlPolicy = { allowPublic?: boolean; allowPrivate?: boolean };
+
+export const PRIVATE_MODEL_ENDPOINT_MESSAGE =
+  "Private model endpoints require operator authorization.";
+
+export function assertAllowedOpenAiCompatibleUrl(
+  raw: string,
+  opts?: OpenAiCompatibleUrlPolicy,
+): URL {
+  const normalized = normalizeOpenAiCompatibleBaseUrl(raw);
+  return assertAllowedOpenAiCompatibleRequestUrl(normalized, opts);
+}
+
+/**
+ * When an API key will be sent, refuse public http:// endpoints so the Bearer
+ * token is not cleartext on the public internet. Private / loopback http stays
+ * allowed (local model servers). https:// is always fine for this check.
+ */
+export function assertHttpsForKeyedOpenAiCompatibleUrl(
+  url: URL,
+  apiKey: string | undefined | null,
+  hasHeaders = false,
+): void {
+  if (!apiKey?.trim() && !hasHeaders) return;
+  if (url.protocol === "https:") return;
+  const hostname = normalizeHostname(url.hostname);
+  if (isPrivateOpenAiCompatibleHostname(hostname)) return;
+  throw new Error(
+    hasHeaders
+      ? "OpenAI-compatible endpoints that send an API key or custom headers must use HTTPS. Use an https:// URL, or omit the API key and custom headers on a private HTTP endpoint."
+      : "OpenAI-compatible endpoints that send an API key must use HTTPS. Use an https:// URL, or omit the API key on a private HTTP endpoint.",
+  );
+}
+
+export function assertAllowedOpenAiCompatibleRequestUrl(
+  raw: string,
+  opts?: OpenAiCompatibleUrlPolicy,
+): URL {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("Model server URL must be an absolute HTTP(S) URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Model server URL must use http or https");
+  }
+  if (url.username || url.password) {
+    throw new Error("Model server URL must not contain credentials");
+  }
+  const hostname = normalizeHostname(url.hostname);
+  if (isBlockedHostname(hostname)) {
+    throw new Error("Base URL targets a blocked metadata or link-local host");
+  }
+  const allowPublic = opts?.allowPublic ?? openAiCompatAllowPublicHosts();
+  if (isPrivateOpenAiCompatibleHostname(hostname)) {
+    if (opts?.allowPrivate !== true) throw new Error(PRIVATE_MODEL_ENDPOINT_MESSAGE);
+    return url;
+  }
+  const builtInPublicHost =
+    url.protocol === "https:" && url.port === "" && BUILT_IN_PUBLIC_MODEL_HOSTS.has(url.hostname);
+  if (!allowPublic && !builtInPublicHost) {
+    throw new Error(
+      "Public model endpoints are blocked. Set RAKAZO_OPENAI_COMPAT_ALLOW_PUBLIC=1 to allow them. A private reverse proxy on localhost or an RFC1918 address does not need that gate.",
+    );
+  }
+  return url;
+}

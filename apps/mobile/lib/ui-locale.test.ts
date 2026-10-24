@@ -1,0 +1,84 @@
+import { describe, expect, it } from "vitest";
+import { htmlLangForLocale, normalizeUiLocale, resolveUiLocale } from "./ui-locale";
+
+describe("normalizeUiLocale", () => {
+  it("maps regional tags onto supported locales", () => {
+    expect(normalizeUiLocale("en-US")).toBe("en");
+    expect(normalizeUiLocale("zh-CN")).toBe("zh-CN");
+    expect(normalizeUiLocale("zh")).toBe("zh-CN");
+    expect(normalizeUiLocale("zh-Hans")).toBe("zh-CN");
+    expect(normalizeUiLocale("zh-SG")).toBe("zh-CN");
+    expect(normalizeUiLocale("ru-RU")).toBe("ru");
+    expect(normalizeUiLocale("ru_KZ")).toBe("ru");
+    expect(normalizeUiLocale("de")).toBe("de");
+    expect(normalizeUiLocale("de-DE")).toBe("de");
+    expect(normalizeUiLocale("de-CH")).toBe("de");
+    expect(normalizeUiLocale("de_AT")).toBe("de");
+    expect(normalizeUiLocale("nl")).toBe("nl");
+    expect(normalizeUiLocale("nl-NL")).toBe("nl");
+    expect(normalizeUiLocale("nl-BE")).toBe("nl");
+    expect(normalizeUiLocale("ja")).toBe("ja");
+    expect(normalizeUiLocale("ja-JP")).toBe("ja");
+  });
+
+  it("does not fold Traditional Chinese into Simplified", () => {
+    expect(normalizeUiLocale("zh-TW")).toBe("en");
+    expect(normalizeUiLocale("zh-HK")).toBe("en");
+    expect(normalizeUiLocale("zh-Hant")).toBe("en");
+  });
+
+  it("falls back to English for unknown locales and web-only languages", () => {
+    expect(normalizeUiLocale("fr-FR")).toBe("en");
+    expect(normalizeUiLocale("ko")).toBe("en");
+    expect(normalizeUiLocale("ko-KR")).toBe("en");
+    expect(normalizeUiLocale("tr")).toBe("en");
+    expect(normalizeUiLocale("hi")).toBe("en");
+    expect(normalizeUiLocale("pt")).toBe("en");
+    expect(normalizeUiLocale("pt-BR")).toBe("en");
+    expect(normalizeUiLocale("")).toBe("en");
+    expect(normalizeUiLocale(null)).toBe("en");
+  });
+});
+
+describe("htmlLangForLocale", () => {
+  it("keeps Simplified Chinese on zh-CN", () => {
+    expect(htmlLangForLocale("zh-CN")).toBe("zh-CN");
+    expect(htmlLangForLocale("en")).toBe("en");
+  });
+});
+
+describe("resolveUiLocale", () => {
+  it("prefers the saved choice over env and device language", () => {
+    expect(
+      resolveUiLocale({
+        stored: "zh-CN",
+        envDefault: "zh-CN",
+        deviceLanguage: "en-US",
+      }),
+    ).toBe("zh-CN");
+  });
+
+  it("uses the env default, then device language, then English", () => {
+    expect(
+      resolveUiLocale({
+        stored: null,
+        envDefault: "zh-CN",
+        deviceLanguage: "en-US",
+      }),
+    ).toBe("zh-CN");
+    expect(
+      resolveUiLocale({
+        stored: null,
+        envDefault: null,
+        deviceLanguage: "zh-CN",
+      }),
+    ).toBe("zh-CN");
+    expect(
+      resolveUiLocale({
+        stored: null,
+        envDefault: null,
+        deviceLanguage: null,
+      }),
+    ).toBe("en");
+  });
+});

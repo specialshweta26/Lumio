@@ -1,0 +1,47 @@
+# Lumio on Render: web UI, API, and worker in one Docker service, plus Postgres.
+# Secret values are not stored here. Set E2B_API_KEY and COMPOSIO_API_KEY in the
+# Render dashboard. A free web instance runs out of memory once the UI, API, and
+# worker start together, so the service needs the 2 GB plan.
+services:
+  - type: web
+    name: Lumio superbot
+    runtime: docker
+    plan: standard
+    region: oregon
+    dockerfilePath: infra/render/Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: Lumio superbot db
+          property: connectionString
+      - key: BETTER_AUTH_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: SCREEN_PROXY_SECRET
+        generateValue: true
+      - key: SANDBOX_PROVIDER
+        value: e2b
+      - key: E2B_API_KEY
+        sync: false
+      - key: COMPOSIO_API_KEY
+        sync: false
+      - key: PHONE_CALLS_ENABLED
+        value: "true"
+      - key: SIGNUPS_ENABLED
+        value: "true"
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /tmp/rakazo-data
+
+databases:
+  - name: Lumio superbot db
+    plan: free
+    region: oregon
+    databaseName: rakazo
+    user: rakazo
+    postgresMajorVersion: "16"
+    ipAllowList: []

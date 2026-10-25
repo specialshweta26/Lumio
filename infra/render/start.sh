@@ -47,6 +47,20 @@ if [[ "$SANDBOX_PROVIDER" != "none" ]]; then
         [kind, "stopped"],
       );
       console.log("computer-kind-updated", result.rowCount);
+      await client.query(`
+        CREATE OR REPLACE FUNCTION revoke_computer_screens() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF (NEW.state IS DISTINCT FROM OLD.state AND NOT (
+                (OLD.state = $s$booting$s$ AND NEW.state = $s$running$s$)
+                OR (OLD.state = $s$running$s$ AND NEW.state = $s$booting$s$)
+              ))
+            OR NEW."providerRef" IS DISTINCT FROM OLD."providerRef" THEN
+            NEW."screenGeneration" := OLD."screenGeneration" + 1;
+          END IF;
+          RETURN NEW;
+        END;
+        $$`);
+      console.log("screen-trigger-updated");
       await client.end();
     '
   ) || echo "computer-kind-update-failed" >&2
@@ -81,6 +95,32 @@ find "$lumio_root/apps/web/dist" -type f \( \
   -name "*.webmanifest" -o -name "*.svg" -o -name "*.txt" \
 \) -exec sed -i "s/Rakazo/Lumio/g" {} +
 echo "lumio-rename-done" >&2
+
+# One automatic Retry while the computer is still running. The published web
+# bundle otherwise leaves a revoked screen on the error until the user clicks.
+node --input-type=module -e '
+import { readFileSync, writeFileSync } from "node:fs";
+const page = process.env.LUMIO_INDEX || "'"$lumio_root"'/apps/web/dist/index.html";
+const script = `<script id="lumio-screen-retry">
+(function () {
+  var tries = 0;
+  new MutationObserver(function () {
+    if (tries >= 1) return;
+    var alert = document.querySelector("[role=alert]");
+    if (!alert || alert.textContent.indexOf("Could not connect to the computer screen") < 0) return;
+    var button = alert.querySelector("button");
+    if (!button) return;
+    tries += 1;
+    setTimeout(function () { button.click(); }, 600);
+  }).observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+})();
+</script>`;
+let html = readFileSync(page, "utf8");
+if (html.includes("lumio-screen-retry")) process.exit(0);
+html = html.includes("</body>") ? html.replace("</body>", script + "</body>") : html + script;
+writeFileSync(page, html);
+console.log("screen-retry-injected");
+' || echo "screen-retry-inject-failed" >&2
 
 cd /app
 node --enable-source-maps apps/api/dist/cli/migrate-database.js
